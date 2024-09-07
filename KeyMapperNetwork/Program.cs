@@ -18,11 +18,14 @@ namespace NetworkConsoleApp
         static UdpClient udpClient;
         static bool isHost = false;
         static List<IPEndPoint> clients = new List<IPEndPoint>();
+        static int port = 11000;  // Fixed port for the application
 
         static void Main(string[] args)
         {
             settings = LoadSettings(settingsFilePath) ?? new Settings();
             LoadKeyMappings();
+
+            DisplaySettings();
 
             while (true)
             {
@@ -57,8 +60,8 @@ namespace NetworkConsoleApp
         {
             Console.WriteLine("[LOG] Starting host...");
             isHost = true;
-            udpClient = new UdpClient(11000);
-            Console.WriteLine("Hosting server on port 11000...");
+            udpClient = new UdpClient(port);
+            Console.WriteLine($"Hosting server on port {port}...");
 
             udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
             Console.WriteLine("Press any key to send, 'q' to stop hosting.");
@@ -119,16 +122,22 @@ namespace NetworkConsoleApp
         static void JoinServer()
         {
             Console.WriteLine("[LOG] Attempting to join server...");
-            Console.Write("Enter the server IP address: ");
+            Console.Write($"Enter the server IP address (or press Enter to use the last IP: {settings.LastUsedIPAddress}): ");
             string ipAddress = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(ipAddress) && !string.IsNullOrWhiteSpace(settings.LastUsedIPAddress))
+            {
+                ipAddress = settings.LastUsedIPAddress;
+                Console.WriteLine($"[LOG] Using last saved IP: {ipAddress}");
+            }
 
             if (IPAddress.TryParse(ipAddress, out IPAddress ip))
             {
                 settings.LastUsedIPAddress = ipAddress;
                 SaveSettings(settingsFilePath, settings);
 
-                udpClient = new UdpClient();
-                udpClient.Connect(ip, 11000);
+                udpClient = new UdpClient(port);  // Bind to the same port as the host
+                udpClient.Connect(ip, port);
 
                 // Notify host of the new connection
                 string localIp = GetLocalIPAddress();
@@ -138,12 +147,22 @@ namespace NetworkConsoleApp
 
                 Console.WriteLine("Connected to server. Waiting for key events...");
 
-                udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
-
+                // Continuous receiving of data
                 while (true)
                 {
-                    // Client just waits for incoming key events
-                    if (Console.ReadKey(true).KeyChar == 'q')
+                    IPEndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, port);
+                    byte[] receivedData = udpClient.Receive(ref remoteEndPoint);
+
+                    if (receivedData.Length > 0)
+                    {
+                        string messageText = Encoding.UTF8.GetString(receivedData);
+                        Console.WriteLine($"[LOG] Received key: {messageText}");
+
+                        // Simulate the key press on the client machine
+                        SimulateKeyPress(messageText[0]);
+                    }
+
+                    if (Console.KeyAvailable && Console.ReadKey(true).KeyChar == 'q')
                     {
                         Console.WriteLine("[LOG] Disconnecting from server.");
                         udpClient.Close();
@@ -160,7 +179,7 @@ namespace NetworkConsoleApp
         static void ReceiveCallback(IAsyncResult ar)
         {
             Console.WriteLine("[LOG] Receiving data...");
-            IPEndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 11000);
+            IPEndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, port);
             byte[] receivedData = udpClient.EndReceive(ar, ref remoteEndPoint);
 
             if (receivedData.Length > 0)
@@ -170,7 +189,7 @@ namespace NetworkConsoleApp
                 {
                     string newClientIp = message.Split(':')[1];
                     Console.WriteLine($"[LOG] New client joined from IP: {newClientIp}");
-                    clients.Add(new IPEndPoint(IPAddress.Parse(newClientIp), 11000));
+                    clients.Add(new IPEndPoint(IPAddress.Parse(newClientIp), port));
                 }
                 else
                 {
@@ -225,6 +244,17 @@ namespace NetworkConsoleApp
                 return JsonConvert.DeserializeObject<Settings>(json);
             }
             return null;
+        }
+
+        static void DisplaySettings()
+        {
+            Console.WriteLine("[LOG] Displaying current settings:");
+            Console.WriteLine($"- Last Used IP: {settings.LastUsedIPAddress}");
+            Console.WriteLine($"- Key Mappings:");
+            foreach (var mapping in keyMappings)
+            {
+                Console.WriteLine($"  {mapping.Key} -> {mapping.Value}");
+            }
         }
 
         static string GetLocalIPAddress()
