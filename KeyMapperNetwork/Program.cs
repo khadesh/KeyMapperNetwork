@@ -5,8 +5,8 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Xml;
 using Newtonsoft.Json;
+using WindowsInput;
 
 namespace NetworkConsoleApp
 {
@@ -59,20 +59,11 @@ namespace NetworkConsoleApp
             Console.WriteLine("Hosting server on port 11000...");
 
             udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
+            Console.WriteLine("Press 'q' to stop hosting.");
 
             while (true)
             {
-                ConsoleKeyInfo keyInfo = Console.ReadKey(true);
-                char key = keyInfo.KeyChar;
-
-                if (keyMappings.ContainsKey(key))
-                {
-                    byte[] message = Encoding.UTF8.GetBytes(keyMappings[key].ToString());
-                    udpClient.Send(message, message.Length, new IPEndPoint(IPAddress.Broadcast, 11000));
-                    Console.WriteLine($"Sent key: {keyMappings[key]}");
-                }
-
-                if (key == 'q')
+                if (Console.ReadKey(true).KeyChar == 'q')
                 {
                     Console.WriteLine("Stopping host.");
                     udpClient.Close();
@@ -117,6 +108,11 @@ namespace NetworkConsoleApp
                 udpClient.Connect(ip, 11000);
                 udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
 
+                // Notify host of the new connection
+                string localIp = GetLocalIPAddress();
+                byte[] message = Encoding.UTF8.GetBytes($"new:{localIp}");
+                udpClient.Send(message, message.Length);
+
                 Console.WriteLine("Connected to server. Press 'q' to quit.");
                 while (true)
                 {
@@ -141,13 +137,23 @@ namespace NetworkConsoleApp
 
             if (receivedData.Length > 0)
             {
-                char receivedKey = Encoding.UTF8.GetString(receivedData)[0];
-                Console.WriteLine($"Received key: {receivedKey}");
-
-                // Simulate the key press on the client machine (simplified for demonstration)
-                if (keyMappings.ContainsValue(receivedKey))
+                string message = Encoding.UTF8.GetString(receivedData);
+                if (message.StartsWith("new:"))
                 {
-                    Console.WriteLine($"Simulating key press: {receivedKey}");
+                    string newClientIp = message.Split(':')[1];
+                    Console.WriteLine($"New client joined: {newClientIp}");
+                }
+                else
+                {
+                    char receivedKey = message[0];
+                    Console.WriteLine($"Received key: {receivedKey}");
+
+                    // Simulate the key press on the client machine
+                    if (keyMappings.ContainsValue(receivedKey))
+                    {
+                        Console.WriteLine($"Simulating key press: {receivedKey}");
+                        SimulateKeyPress(receivedKey);
+                    }
                 }
             }
 
@@ -155,6 +161,13 @@ namespace NetworkConsoleApp
             {
                 udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
             }
+        }
+
+        static void SimulateKeyPress(char key)
+        {
+            var sim = new InputSimulator();
+            sim.Keyboard.TextEntry(key);
+            Console.WriteLine($"Simulated key press: {key}");
         }
 
         static void SaveKeyMappings()
@@ -173,7 +186,7 @@ namespace NetworkConsoleApp
 
         static void SaveSettings(string filePath, Settings settings)
         {
-            var json = JsonConvert.SerializeObject(settings, Newtonsoft.Json.Formatting.Indented);
+            var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
             File.WriteAllText(filePath, json);
         }
 
@@ -185,6 +198,19 @@ namespace NetworkConsoleApp
                 return JsonConvert.DeserializeObject<Settings>(json);
             }
             return null;
+        }
+
+        static string GetLocalIPAddress()
+        {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    return ip.ToString();
+                }
+            }
+            throw new Exception("No network adapters with an IPv4 address in the system!");
         }
     }
 
