@@ -15,8 +15,9 @@ namespace NetworkConsoleApp
         static string settingsFilePath = "program.settings";
         static Settings settings;
         static Dictionary<char, char> keyMappings = new Dictionary<char, char>();
-        static UdpClient udpClient = new UdpClient();
+        static UdpClient udpClient;
         static bool isHost = false;
+        static List<IPEndPoint> clients = new List<IPEndPoint>();
 
         static void Main(string[] args)
         {
@@ -54,21 +55,41 @@ namespace NetworkConsoleApp
 
         static void StartHost()
         {
+            Console.WriteLine("[LOG] Starting host...");
             isHost = true;
             udpClient = new UdpClient(11000);
             Console.WriteLine("Hosting server on port 11000...");
 
             udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
-            Console.WriteLine("Press 'q' to stop hosting.");
+            Console.WriteLine("Press any key to send, 'q' to stop hosting.");
 
             while (true)
             {
-                if (Console.ReadKey(true).KeyChar == 'q')
+                var keyInfo = Console.ReadKey(true);
+                char key = keyInfo.KeyChar;
+
+                if (key == 'q')
                 {
-                    Console.WriteLine("Stopping host.");
+                    Console.WriteLine("[LOG] Stopping host.");
                     udpClient.Close();
                     break;
                 }
+
+                if (keyMappings.ContainsKey(key))
+                {
+                    SendKeyToClients(keyMappings[key]);
+                }
+            }
+        }
+
+        static void SendKeyToClients(char key)
+        {
+            Console.WriteLine($"[LOG] Sending key: {key}");
+            byte[] message = Encoding.UTF8.GetBytes(key.ToString());
+            foreach (var client in clients)
+            {
+                udpClient.Send(message, message.Length, client);
+                Console.WriteLine($"[LOG] Sent key: {key} to {client.Address}");
             }
         }
 
@@ -97,6 +118,7 @@ namespace NetworkConsoleApp
 
         static void JoinServer()
         {
+            Console.WriteLine("[LOG] Attempting to join server...");
             Console.Write("Enter the server IP address: ");
             string ipAddress = Console.ReadLine();
 
@@ -105,20 +127,25 @@ namespace NetworkConsoleApp
                 settings.LastUsedIPAddress = ipAddress;
                 SaveSettings(settingsFilePath, settings);
 
+                udpClient = new UdpClient();
                 udpClient.Connect(ip, 11000);
-                udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
 
                 // Notify host of the new connection
                 string localIp = GetLocalIPAddress();
                 byte[] message = Encoding.UTF8.GetBytes($"new:{localIp}");
                 udpClient.Send(message, message.Length);
+                Console.WriteLine($"[LOG] Notified host of new connection from IP: {localIp}");
 
-                Console.WriteLine("Connected to server. Press 'q' to quit.");
+                Console.WriteLine("Connected to server. Waiting for key events...");
+
+                udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
+
                 while (true)
                 {
+                    // Client just waits for incoming key events
                     if (Console.ReadKey(true).KeyChar == 'q')
                     {
-                        Console.WriteLine("Disconnecting from server.");
+                        Console.WriteLine("[LOG] Disconnecting from server.");
                         udpClient.Close();
                         break;
                     }
@@ -126,12 +153,13 @@ namespace NetworkConsoleApp
             }
             else
             {
-                Console.WriteLine("Invalid IP address.");
+                Console.WriteLine("[LOG] Invalid IP address.");
             }
         }
 
         static void ReceiveCallback(IAsyncResult ar)
         {
+            Console.WriteLine("[LOG] Receiving data...");
             IPEndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 11000);
             byte[] receivedData = udpClient.EndReceive(ar, ref remoteEndPoint);
 
@@ -141,30 +169,25 @@ namespace NetworkConsoleApp
                 if (message.StartsWith("new:"))
                 {
                     string newClientIp = message.Split(':')[1];
-                    Console.WriteLine($"New client joined: {newClientIp}");
+                    Console.WriteLine($"[LOG] New client joined from IP: {newClientIp}");
+                    clients.Add(new IPEndPoint(IPAddress.Parse(newClientIp), 11000));
                 }
                 else
                 {
                     char receivedKey = message[0];
-                    Console.WriteLine($"Received key: {receivedKey}");
+                    Console.WriteLine($"[LOG] Received key: {receivedKey}");
 
                     // Simulate the key press on the client machine
-                    if (keyMappings.ContainsValue(receivedKey))
-                    {
-                        Console.WriteLine($"Simulating key press: {receivedKey}");
-                        SimulateKeyPress(receivedKey);
-                    }
+                    SimulateKeyPress(receivedKey);
                 }
             }
 
-            if (isHost)
-            {
-                udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
-            }
+            udpClient.BeginReceive(new AsyncCallback(ReceiveCallback), null);
         }
 
         static void SimulateKeyPress(char key)
         {
+            Console.WriteLine($"[LOG] Simulating key press: {key}");
             var sim = new InputSimulator();
             sim.Keyboard.TextEntry(key);
             Console.WriteLine($"Simulated key press: {key}");
@@ -174,10 +197,12 @@ namespace NetworkConsoleApp
         {
             settings.KeyMappings = keyMappings.ToDictionary(kvp => kvp.Key.ToString(), kvp => kvp.Value.ToString());
             SaveSettings(settingsFilePath, settings);
+            Console.WriteLine("[LOG] Key mappings saved.");
         }
 
         static void LoadKeyMappings()
         {
+            Console.WriteLine("[LOG] Loading key mappings...");
             if (settings.KeyMappings != null)
             {
                 keyMappings = settings.KeyMappings.ToDictionary(kvp => kvp.Key[0], kvp => kvp.Value[0]);
@@ -186,12 +211,14 @@ namespace NetworkConsoleApp
 
         static void SaveSettings(string filePath, Settings settings)
         {
+            Console.WriteLine("[LOG] Saving settings...");
             var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
             File.WriteAllText(filePath, json);
         }
 
         static Settings LoadSettings(string filePath)
         {
+            Console.WriteLine("[LOG] Loading settings...");
             if (File.Exists(filePath))
             {
                 var json = File.ReadAllText(filePath);
@@ -202,6 +229,7 @@ namespace NetworkConsoleApp
 
         static string GetLocalIPAddress()
         {
+            Console.WriteLine("[LOG] Getting local IP address...");
             var host = Dns.GetHostEntry(Dns.GetHostName());
             foreach (var ip in host.AddressList)
             {
